@@ -7,3 +7,8 @@ __pycache__/
 *.pyc
 .env
 .venv/
+.DS_Store
+.user.yml
+*.csv
+analysis-patch/
+_site/

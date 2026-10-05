@@ -53,11 +53,21 @@ jobs:
         if: github.event_name != 'pull_request'
         run: dbt docs generate --static
 
-      - name: Upload docs artifact
+      - name: Assemble site
+        # The write-up is the landing page, because a finding is what a reader
+        # came for. The generated model documentation sits one level down for
+        # anyone who wants to check how the numbers were built.
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p _site/docs
+          cp analysis/index.html _site/index.html
+          cp target/static_index.html _site/docs/index.html
+
+      - name: Upload site artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: target/
+          path: _site/
 
       - name: Summarise run
         if: always()

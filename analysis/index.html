@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dogs Are Waiting Longer</title>
+<meta name="description" content="Austin Animal Center's live release rate held steady for eight years while the median dog's wait for adoption tripled.">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #faf9f6;
+    --surface: #ffffff;
+    --rule: #e3e0d8;
+    --ink: #1c1b19;
+    --ink-2: #4a4843;
+    --ink-3: #78756d;
+    --dog: #2a78d6;
+    --cat: #eb6834;
+    --flat: #78756d;
+    --grid: #e8e5dd;
+    --accent: #b4762a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #141414;
+      --surface: #1c1c1b;
+      --rule: #333331;
+      --ink: #f2f1ed;
+      --ink-2: #c3c2b9;
+      --ink-3: #8e8c84;
+      --dog: #3987e5;
+      --cat: #d95926;
+      --flat: #8e8c84;
+      --grid: #2b2b29;
+      --accent: #d6a152;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #141414; --surface: #1c1c1b; --rule: #333331;
+    --ink: #f2f1ed; --ink-2: #c3c2b9; --ink-3: #8e8c84;
+    --dog: #3987e5; --cat: #d95926; --flat: #8e8c84;
+    --grid: #2b2b29; --accent: #d6a152;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: Charter, "Bitstream Charter", "Iowan Old Style", Georgia, serif;
+    font-size: 19px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 42rem; margin: 0 auto; padding: 4.5rem 16px 6rem; }
+
+  h1 {
+    font-size: clamp(2rem, 6vw, 2.9rem);
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    margin: 0 0 1rem;
+    font-weight: 600;
+  }
+  .standfirst {
+    font-size: 1.18rem;
+    line-height: 1.5;
+    color: var(--ink-2);
+    margin: 0 0 1.75rem;
+  }
+  .byline {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    padding: 0.7rem 0;
+    margin-bottom: 2.75rem;
+  }
+  h2 {
+    font-size: 1.4rem;
+    letter-spacing: -0.01em;
+    margin: 3.25rem 0 0.9rem;
+    font-weight: 600;
+  }
+  p { margin: 0 0 1.15rem; }
+  a { color: var(--ink); text-decoration-color: var(--accent); text-underline-offset: 3px; }
+  a:hover { color: var(--accent); }
+  strong { font-weight: 600; }
+
+  .lede-num {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
+  figure {
+    margin: 2.25rem 0 2.5rem;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 1.4rem 1.25rem 1rem;
+  }
+  figcaption {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: var(--ink-3);
+    margin-top: 0.9rem;
+  }
+  .chart-title {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0 0 0.15rem;
+  }
+  .chart-sub {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.8rem;
+    color: var(--ink-3);
+    margin: 0 0 0.9rem;
+  }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 1rem;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.8rem; color: var(--ink-2);
+    margin-bottom: 0.6rem;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .tick { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 11px; fill: var(--ink-3); }
+  .dlabel { font-family: ui-sans-serif, system-ui, sans-serif; font-size: 11px; font-weight: 600; }
+
+  .tip {
+    position: fixed; pointer-events: none; opacity: 0;
+    transform: translate(-50%, -115%);
+    background: var(--ink); color: var(--bg);
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.74rem;
+    padding: 0.4rem 0.55rem; border-radius: 6px; white-space: nowrap;
+    transition: opacity .09s linear; z-index: 10;
+    font-variant-numeric: tabular-nums;
+  }
+
+  details {
+    margin-top: 0.75rem;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.8rem;
+    color: var(--ink-2);
+  }
+  summary { cursor: pointer; color: var(--ink-3); }
+  table { border-collapse: collapse; margin-top: 0.6rem; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 0.22rem 0.5rem; border-bottom: 1px solid var(--rule); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--ink-3); font-weight: 600; }
+
+  .note {
+    border-left: 2px solid var(--accent);
+    padding: 0.1rem 0 0.1rem 1.1rem;
+    margin: 2rem 0;
+    color: var(--ink-2);
+  }
+
+  .method {
+    margin-top: 3.5rem;
+    border-top: 1px solid var(--rule);
+    padding-top: 1.5rem;
+    font-size: 0.92rem;
+    color: var(--ink-2);
+  }
+  .method h2 { font-size: 1.05rem; margin-top: 0; }
+
+  ul { padding-left: 1.1rem; margin: 0 0 1.15rem; }
+  li { margin-bottom: 0.5rem; }
+
+  .theme-toggle {
+    position: fixed; top: 14px; right: 14px;
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.72rem;
+    background: var(--surface); color: var(--ink-3);
+    border: 1px solid var(--rule); border-radius: 999px;
+    padding: 0.3rem 0.7rem; cursor: pointer;
+  }
+  @media (max-width: 640px) {
+    body { font-size: 18px; }
+    .wrap { padding-top: 3rem; }
+  }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="tt">theme</button>
+<div class="wrap">
+
+<h1>Dogs are waiting three times longer</h1>
+<p class="standfirst">Austin Animal Center's live release rate has sat between 96 and 97 percent since 2016. Underneath it, the median dog's wait for adoption went from a week to three.</p>
+<div class="byline">Beck Lyons &nbsp;·&nbsp; October 2026 &nbsp;·&nbsp; 173,812 intake records, 2014 to 2024</div>
+
+<p>The median dog adopted from Austin Animal Center in 2018 had been there <span class="lede-num">7 days</span>. In 2023 that figure was <span class="lede-num">26</span>. In 2024 it was <span class="lede-num">20</span>.</p>
+
+<p>Over the same stretch, the live release rate went from 97.6 percent to 96.0. That is the number shelters are judged on, the one that turns up in budget hearings and local coverage, and on its own it says nothing happened.</p>
+
+<figure>
+  <p class="chart-title">Median days from intake to adoption</p>
+  <p class="chart-sub">Closed stays only. 2013 and 2025 are partial years and are excluded.</p>
+  <div class="legend">
+    <span><i class="swatch" style="background:var(--dog)"></i>Dogs</span>
+    <span><i class="swatch" style="background:var(--cat)"></i>Cats</span>
+  </div>
+  <svg id="c1" viewBox="0 0 680 320" role="img" aria-label="Line chart of median days to adoption for dogs and cats, 2014 to 2024. Dogs rise from 8 days to 20. Cats stay near 25."></svg>
+  <figcaption>Cats have always waited about a month and still do. Dogs used to leave in a week.</figcaption>
+  <details>
+    <summary>Show the numbers</summary>
+    <table id="t1"></table>
+  </details>
+</figure>
+
+<h2>The explanation I reached for first was wrong</h2>
+
+<p>Austin's outcome mix has changed a lot. Return to owner fell from 19.8 percent of dog and cat outcomes in 2016 to 7.4 percent in 2024. Transfers to partner groups dropped from 28.6 to 22.7. Adoption picked up the difference, rising from 48 percent to 65.</p>
+
+<p>Those three outcomes take very different amounts of time. A dog returned to its owner is usually gone in a day or two. A transfer takes about four days. An adoption takes weeks. So a shelter doing proportionally more adoptions will show a longer average stay without anything at all having slowed down, which is a boring explanation and a very plausible one.</p>
+
+<p>It is not what happened here. When you hold the outcome type fixed and look only at dogs that were adopted, the wait still tripled. The mix shifted and adoption itself got slower, and the second one is doing the work.</p>
+
+<figure>
+  <p class="chart-title">Median days in care for dogs, by how they left</p>
+  <p class="chart-sub">Same animals, split by outcome rather than pooled.</p>
+  <div class="legend">
+    <span><i class="swatch" style="background:var(--dog)"></i>Adopted</span>
+    <span><i class="swatch" style="background:var(--flat)"></i>Transferred</span>
+    <span><i class="swatch" style="background:repeating-linear-gradient(90deg,var(--flat) 0 4px,transparent 4px 7px)"></i>Returned to owner</span>
+  </div>
+  <svg id="c2" viewBox="0 0 680 320" role="img" aria-label="Line chart of median days in care for dogs by outcome type. Adoption rises sharply after 2022 while transfer and return to owner stay flat."></svg>
+  <figcaption>Return to owner has held at one or two days for eleven years. Transfers got faster. Only the adoption line moves.</figcaption>
+  <details>
+    <summary>Show the numbers</summary>
+    <table id="t2"></table>
+  </details>
+</figure>
+
+<p>That pattern is what makes me believe it. A building that is simply overwhelmed slows down at every exit. Here the owner reclaim desk is as quick as it ever was and the transfer pipeline is quicker. The delay sits in one place.</p>
+
+<div class="note">
+  <p>The tail moved further than the middle. The slowest tenth of dog adoptions took 64 days in 2018 and 121 days in 2024. Those are the animals that occupy a kennel for four months, and there are more of them than there used to be.</p>
+</div>
+
+<h2>Why the headline metric cannot show this</h2>
+
+<p>Live release rate is a ratio of outcomes: how many animals left alive, over how many left at all. It is a good measure of whether a shelter is killing animals for space, which is the thing it was designed to catch, and by that measure Austin is doing well and has been for a decade.</p>
+
+<p>It contains no notion of time. A dog adopted on day 3 and a dog adopted on day 120 are the same single point in the numerator. You could double every length of stay in the building and the rate would not move.</p>
+
+<figure>
+  <p class="chart-title">Live release rate, dogs and cats combined</p>
+  <p class="chart-sub">Live outcomes as a share of all classified outcomes.</p>
+  <svg id="c3" viewBox="0 0 680 190" role="img" aria-label="Line chart of live release rate from 2014 to 2024, rising to about 97 percent by 2016 and staying flat."></svg>
+  <figcaption>Flat to within about a point and a half since 2016.</figcaption>
+</figure>
+
+<h2>What I would put next to it</h2>
+
+<p>Median days to adoption, reported separately for dogs and cats, with the 90th percentile next to it.</p>
+
+<p>Splitting by species is not a technicality. Pooled, the two trends partly cancel: cats are slow and flat, dogs are fast and rising, and the combined line understates what happened to dogs while implying something changed for cats. The species split is the finding, not a cut of it.</p>
+
+<p>The 90th percentile matters because capacity is consumed by the tail. A shelter with a 20 day median and a 121 day 90th percentile is housing a long-stay population that a median alone will never describe.</p>
+
+<p>If I were handed this at the shelter, the question I would want answered next is which dogs are waiting. The obvious candidates are size and behavioural history, and the national pattern since 2021 has been large dogs moving slowly. I could not test that here, for reasons below.</p>
+
+<h2>What this does not tell you</h2>
+
+<ul>
+  <li><strong>Why it happened.</strong> The feed carries breed and colour but no weight, size class, or behavioural flag, so the most likely explanation is also the one I cannot check.</li>
+  <li><strong>The break is 2023, not 2020.</strong> Intake volume halved in 2020 and the pandemic disrupted everything, but dog adoption stays sat at 11 to 13 days through 2022 before jumping. Whatever this is, it arrived three years after the obvious candidate.</li>
+  <li><strong>One shelter in one city.</strong> Austin is unusually well resourced and unusually committed to a high live release rate. Nothing here generalises without checking.</li>
+  <li><strong>No control group and no intervention.</strong> This is a description of a trend, not a causal claim about anything the shelter did.</li>
+  <li><strong>1,724 records were set aside.</strong> 940 outcomes had no matching intake, usually animals admitted before the published range begins, and 784 carried an outcome dated before their intake. That is under one percent of the file. They are listed with reasons in the project's data quality table rather than dropped silently.</li>
+  <li><strong>The window is 2014 to 2024.</strong> The published data starts in October 2013 and ends on 4 May 2025, so both edge years are partial and neither appears in any trend above.</li>
+</ul>
+
+<div class="method">
+<h2>How this was built</h2>
+<p>Austin publishes two files: one row per intake, one row per outcome. Neither carries a stay identifier, and animals come back, so joining them on the animal's ID alone produces a cross product. One dog in this data has been through the shelter 33 times.</p>
+<p>The models pair the nth outcome with the nth intake for each animal, which is correct unless the feed is missing a record in the middle of an animal's history, in which case everything after it shifts by one. That failure shows up as an outcome dated before its intake, so those rows are flagged, excluded, and counted rather than trusted.</p>
+<p>Pipeline is dbt on DuckDB, 173,812 intakes and 173,775 outcomes, 54 tests, rebuilt daily by a scheduled job. The code, the metric definitions, and the generated documentation are at <a href="https://github.com/blyons044/shelter-analytics">github.com/blyons044/shelter-analytics</a> and <a href="docs/">the model docs</a>.</p>
+<p>Source data published by the City of Austin. This analysis is not affiliated with the City of Austin or Austin Animal Center.</p>
+</div>
+
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+const YEARS = [2014,2015,2016,2017,2018,2019,2020,2021,2022,2023,2024];
+const DOG_ADOPT = [8,8,7,6,7,8,11,11,13,26,20];
+const CAT_ADOPT = [20,28,28,25,26,32,36,21,23,26,25];
+const DOG_TRANSFER = [6,6,6,5,5,6,5,5,7,4,4];
+const DOG_RTO = [2,2,2,1,1,1,2,1,1,2,2];
+const LIVE = [93.4,94.3,96.5,97.1,97.6,97.2,96.1,96.6,96.9,97.0,96.0];
+
+const tip = document.getElementById('tip');
+const NS = 'http://www.w3.org/2000/svg';
+const el = (n, a) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); return e; };
+
+function lineChart(id, series, opts) {
+  const svg = document.getElementById(id);
+  svg.textContent = '';
+  const W = 680, H = opts.height || 320;
+  const m = { t: 14, r: 46, b: 30, l: 38 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const all = series.flatMap(s => s.values);
+  const yMax = opts.yMax ?? Math.ceil(Math.max(...all) / 5) * 5;
+  const yMin = opts.yMin ?? 0;
+  const x = i => m.l + (iw * i) / (YEARS.length - 1);
+  const y = v => m.t + ih - (ih * (v - yMin)) / (yMax - yMin);
+
+  (opts.ticks || [0, yMax / 2, yMax]).forEach(t => {
+    svg.appendChild(el('line', { x1: m.l, x2: m.l + iw, y1: y(t), y2: y(t), stroke: 'var(--grid)', 'stroke-width': 1 }));
+    const lb = el('text', { x: m.l - 8, y: y(t) + 4, class: 'tick', 'text-anchor': 'end' });
+    lb.textContent = opts.fmt ? opts.fmt(t) : t;
+    svg.appendChild(lb);
+  });
+
+  YEARS.forEach((yr, i) => {
+    if (i % 2 !== 0 && i !== YEARS.length - 1) return;
+    const lb = el('text', { x: x(i), y: H - 8, class: 'tick', 'text-anchor': 'middle' });
+    lb.textContent = "'" + String(yr).slice(2);
+    svg.appendChild(lb);
+  });
+
+  series.forEach(s => {
+    const d = s.values.map((v, i) => (i ? 'L' : 'M') + x(i) + ',' + y(v)).join(' ');
+    const pa = { d, fill: 'none', stroke: s.color, 'stroke-width': s.width || 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', opacity: s.opacity || 1 };
+    if (s.dash) pa['stroke-dasharray'] = s.dash;
+    svg.appendChild(el('path', pa));
+    const last = s.values.length - 1;
+    svg.appendChild(el('circle', { cx: x(last), cy: y(s.values[last]), r: 3.5, fill: s.color, stroke: 'var(--surface)', 'stroke-width': 2, opacity: s.opacity || 1 }));
+    const lab = el('text', { x: x(last) + 9, y: y(s.values[last]) + 4, class: 'dlabel', fill: s.color, opacity: s.opacity || 1 });
+    lab.textContent = opts.fmt ? opts.fmt(s.values[last]) : s.values[last];
+    svg.appendChild(lab);
+  });
+
+  const hover = el('line', { y1: m.t, y2: m.t + ih, stroke: 'var(--ink-3)', 'stroke-width': 1, opacity: 0 });
+  svg.appendChild(hover);
+  const hit = el('rect', { x: m.l, y: m.t, width: iw, height: ih, fill: 'transparent' });
+  svg.appendChild(hit);
+
+  function move(ev) {
+    const r = svg.getBoundingClientRect();
+    const px = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width * W;
+    let i = Math.round(((px - m.l) / iw) * (YEARS.length - 1));
+    i = Math.max(0, Math.min(YEARS.length - 1, i));
+    hover.setAttribute('x1', x(i)); hover.setAttribute('x2', x(i)); hover.setAttribute('opacity', 0.35);
+    tip.innerHTML = '<b>' + YEARS[i] + '</b> &nbsp; ' + series.map(s => s.name + ' ' + (opts.fmt ? opts.fmt(s.values[i]) : s.values[i])).join(' &nbsp;·&nbsp; ');
+    tip.style.left = (r.left + (x(i) / W) * r.width) + 'px';
+    tip.style.top = (r.top + 18) + 'px';
+    tip.style.opacity = 1;
+  }
+  hit.addEventListener('mousemove', move);
+  hit.addEventListener('touchmove', e => { move(e); e.preventDefault(); }, { passive: false });
+  hit.addEventListener('mouseleave', () => { tip.style.opacity = 0; hover.setAttribute('opacity', 0); });
+}
+
+function table(id, cols) {
+  const t = document.getElementById(id);
+  let h = '<thead><tr><th>Year</th>' + cols.map(c => '<th>' + c.name + '</th>').join('') + '</tr></thead><tbody>';
+  YEARS.forEach((yr, i) => {
+    h += '<tr><td>' + yr + '</td>' + cols.map(c => '<td>' + c.values[i] + '</td>').join('') + '</tr>';
+  });
+  t.innerHTML = h + '</tbody>';
+}
+
+lineChart('c1', [
+  { name: 'Dogs', values: DOG_ADOPT, color: 'var(--dog)' },
+  { name: 'Cats', values: CAT_ADOPT, color: 'var(--cat)' },
+], { yMax: 40, ticks: [0, 10, 20, 30, 40] });
+
+lineChart('c2', [
+  { name: 'Adopted', values: DOG_ADOPT, color: 'var(--dog)' },
+  { name: 'Transferred', values: DOG_TRANSFER, color: 'var(--flat)' },
+  { name: 'Returned', values: DOG_RTO, color: 'var(--flat)', dash: '4 3' },
+], { yMax: 30, ticks: [0, 10, 20, 30] });
+
+lineChart('c3', [
+  { name: 'Live release', values: LIVE, color: 'var(--flat)' },
+], { height: 190, yMin: 90, yMax: 100, ticks: [90, 95, 100], fmt: v => v + '%' });
+
+table('t1', [{ name: 'Dogs', values: DOG_ADOPT }, { name: 'Cats', values: CAT_ADOPT }]);
+table('t2', [{ name: 'Adopted', values: DOG_ADOPT }, { name: 'Transferred', values: DOG_TRANSFER }, { name: 'Returned', values: DOG_RTO }]);
+
+const tt = document.getElementById('tt');
+tt.addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+});
+</script>
+</body>
+</html>
