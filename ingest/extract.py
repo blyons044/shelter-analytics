@@ -11,6 +11,11 @@ Incremental loading would be the wrong shape here: records are revised in place
 when staff correct an outcome after the fact, and a merge on animal_id alone
 would silently keep stale rows for animals with repeat stays.
 
+Pages are streamed to newline-delimited JSON and bulk loaded by DuckDB rather
+than inserted row by row. At roughly 190k records per table the difference is
+minutes against seconds, and memory stays flat because no page is held once it
+is written.
+
 Usage:
     python -m ingest.extract                 # pull from the live API
     python -m ingest.extract --sample 4000   # generate sample data, no network
@@ -19,7 +24,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -30,7 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "shelter.duckdb"
 
 PAGE_SIZE = 50_000
-REQUEST_TIMEOUT = 60
+REQUEST_TIMEOUT = 90
 MAX_RETRIES = 4
 
 DATASETS = {
@@ -60,7 +67,7 @@ def fetch_page(resource: str, columns: list[str], offset: int) -> list[dict]:
         "$select": ",".join(columns),
         "$limit": PAGE_SIZE,
         "$offset": offset,
-        "$order": "animal_id,datetime",
+        "$order": ":id",
     }
     last_error: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
@@ -72,44 +79,70 @@ def fetch_page(resource: str, columns: list[str], offset: int) -> list[dict]:
             last_error = exc
             if attempt < MAX_RETRIES:
                 time.sleep(attempt * 3)
-    raise RuntimeError(f"{resource} offset {offset} failed after {MAX_RETRIES} attempts") from last_error
+    raise RuntimeError(
+        f"{resource} offset {offset} failed after {MAX_RETRIES} attempts"
+    ) from last_error
 
 
-def fetch_dataset(name: str) -> list[dict]:
+def write_ndjson(rows: list[dict], handle) -> int:
+    for row in rows:
+        handle.write(json.dumps(row, separators=(",", ":")))
+        handle.write("\n")
+    return len(rows)
+
+
+def stream_dataset(name: str, handle) -> int:
+    """Page through the API, writing each page out before fetching the next."""
     spec = DATASETS[name]
-    rows: list[dict] = []
+    total = 0
     offset = 0
     while True:
         page = fetch_page(spec["resource"], spec["columns"], offset)
-        rows.extend(page)
-        print(f"  {name}: {len(rows):,} rows", flush=True)
+        total += write_ndjson(page, handle)
+        print(f"  {name}: {total:,} rows", flush=True)
         if len(page) < PAGE_SIZE:
-            return rows
+            return total
         offset += PAGE_SIZE
 
 
-def load(con: duckdb.DuckDBPyConnection, name: str, rows: list[dict]) -> None:
-    """Replace the raw table. Every column lands as VARCHAR on purpose.
+def load(con: duckdb.DuckDBPyConnection, name: str, path: Path, expected: int) -> None:
+    """Bulk load the staged file into raw.<name>.
 
-    The API returns everything as strings and roughly 2% of age fields carry
-    values like 'NULL' or negative weeks. Casting at ingest would either drop
-    those rows or fail the load; staging handles them where the rules are
-    visible and testable.
+    Every column lands as VARCHAR on purpose. The API returns everything as
+    strings and roughly 2% of age fields carry values like 'NULL' or negative
+    weeks. Casting at ingest would either drop those rows or fail the load;
+    staging handles them where the rules are visible and testable.
+
+    Socrata omits keys whose value is null rather than emitting a null, so a
+    column that happens to be empty across the whole feed will not appear in
+    the scanned file at all. Missing columns are substituted with NULL rather
+    than allowed to fail the load.
     """
-    if not rows:
+    if expected == 0:
         raise RuntimeError(f"{name}: source returned zero rows, refusing to replace the table")
 
     columns = DATASETS[name]["columns"]
-    normalized = [tuple(str(row.get(c)) if row.get(c) is not None else None for c in columns) for row in rows]
+    scan = f"read_json_auto('{path.as_posix()}', format='newline_delimited', union_by_name=true)"
 
-    con.execute(f"CREATE SCHEMA IF NOT EXISTS raw")
-    col_ddl = ", ".join(f'"{c}" VARCHAR' for c in columns)
-    con.execute(f"CREATE OR REPLACE TABLE raw.{name} ({col_ddl})")
-    con.executemany(
-        f"INSERT INTO raw.{name} VALUES ({', '.join('?' for _ in columns)})",
-        normalized,
+    discovered = {
+        desc[0] for desc in con.execute(f"select * from {scan} limit 0").description
+    }
+
+    projection = ", ".join(
+        (f'cast("{c}" as varchar) as "{c}"' if c in discovered else f'cast(null as varchar) as "{c}"')
+        for c in columns
     )
+
+    missing = [c for c in columns if c not in discovered]
+    if missing:
+        print(f"  note: {name} has no values for {', '.join(missing)}; loaded as null")
+
+    con.execute("CREATE SCHEMA IF NOT EXISTS raw")
+    con.execute(f"CREATE OR REPLACE TABLE raw.{name} AS SELECT {projection} FROM {scan}")
+
     count = con.execute(f"SELECT count(*) FROM raw.{name}").fetchone()[0]
+    if count != expected:
+        raise RuntimeError(f"{name}: staged {expected:,} rows but loaded {count:,}")
     print(f"  loaded raw.{name}: {count:,} rows")
 
 
@@ -125,17 +158,29 @@ def main() -> int:
 
     con = duckdb.connect(str(DB_PATH))
 
-    if args.sample:
-        from ingest.sample import generate
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = Path(tmp)
 
-        print(f"Generating sample data for {args.sample:,} animals")
-        data = generate(args.sample)
-    else:
-        print("Fetching from data.austintexas.gov")
-        data = {name: fetch_dataset(name) for name in DATASETS}
+        if args.sample:
+            from ingest.sample import generate
 
-    for name, rows in data.items():
-        load(con, name, rows)
+            print(f"Generating sample data for {args.sample:,} animals")
+            generated = generate(args.sample)
+            staged = {}
+            for name, rows in generated.items():
+                path = tmpdir / f"{name}.ndjson"
+                with path.open("w") as handle:
+                    staged[name] = (path, write_ndjson(rows, handle))
+        else:
+            print("Fetching from data.austintexas.gov")
+            staged = {}
+            for name in DATASETS:
+                path = tmpdir / f"{name}.ndjson"
+                with path.open("w") as handle:
+                    staged[name] = (path, stream_dataset(name, handle))
+
+        for name, (path, expected) in staged.items():
+            load(con, name, path, expected)
 
     con.close()
     print(f"Done. Database at {DB_PATH}")

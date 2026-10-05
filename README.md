@@ -195,6 +195,18 @@ values are unparseable. Casting at ingest would either drop those rows or fail
 the load. Staging handles them where the rules are visible, documented, and
 testable.
 
+**Bulk load, not row-by-row inserts.** Pages are streamed to newline-delimited
+JSON and read by DuckDB in one scan. The first version of this used
+`executemany`, which binds each row individually: at roughly 190k records per
+table that turned a seconds-long load into a multi-minute one. Streaming also
+keeps memory flat, since no page is held once it has been written.
+
+**Missing columns are substituted, not assumed.** Socrata omits keys whose
+value is null rather than emitting a null, so a column that is empty across the
+whole feed does not appear in the scanned file at all. The loader checks which
+columns were discovered and fills the rest with null, and verifies the loaded
+row count matches what was staged.
+
 **No package dependencies.** `surrogate_key` and the `accepted_range` generic
 test are implemented in `macros/`. dbt_utils would do both, but a portfolio
 project that clones and runs with nothing but a requirements file is worth more
