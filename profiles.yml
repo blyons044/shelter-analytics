@@ -1,0 +1,8 @@
+shelter_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: shelter.duckdb
+      threads: 4
+      schema: main

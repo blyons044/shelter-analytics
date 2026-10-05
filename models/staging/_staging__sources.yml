@@ -1,0 +1,38 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Austin Animal Center intake and outcome records, loaded verbatim from the
+      City of Austin open data portal by ingest/extract.py. Every column lands
+      as text; typing happens in staging where the rules are visible and
+      testable.
+    schema: raw
+    tables:
+      - name: intakes
+        description: >
+          One row per animal intake event. Full snapshot, replaced on every
+          run. Source dataset wter-evkm.
+        columns:
+          - name: animal_id
+            description: Shelter identifier for the animal. Repeats across stays.
+            data_tests:
+              - not_null
+          - name: datetime
+            description: Timestamp the animal was taken in, as text.
+            data_tests:
+              - not_null
+
+      - name: outcomes
+        description: >
+          One row per animal outcome event. Full snapshot, replaced on every
+          run. Source dataset 9t4d-g238.
+        columns:
+          - name: animal_id
+            description: Shelter identifier for the animal. Repeats across stays.
+            data_tests:
+              - not_null
+          - name: datetime
+            description: Timestamp the animal left care, as text.
+            data_tests:
+              - not_null

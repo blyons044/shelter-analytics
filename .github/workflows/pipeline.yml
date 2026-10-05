@@ -1,0 +1,102 @@
+name: pipeline
+
+on:
+  schedule:
+    # 09:12 UTC daily. Off the hour on purpose: scheduled jobs pile up at :00
+    # and GitHub queues them, which turns a two minute run into a twenty
+    # minute wait.
+    - cron: "12 9 * * *"
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      DBT_PROFILES_DIR: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Extract
+        # Pull requests use sample data: a fork should not be able to trigger
+        # a full extract against the city's API, and the schema is identical
+        # either way so the models are tested just as hard.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python -m ingest.extract --sample 8000
+          else
+            python -m ingest.extract
+          fi
+
+      - name: Build and test
+        run: dbt build
+
+      - name: Generate docs
+        if: github.event_name != 'pull_request'
+        run: dbt docs generate --static
+
+      - name: Upload docs artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/
+
+      - name: Summarise run
+        if: always()
+        run: |
+          {
+            echo "### Pipeline run"
+            echo ""
+            if [ -f target/run_results.json ]; then
+              python - <<'PY'
+          import json, collections
+          with open("target/run_results.json") as fh:
+              results = json.load(fh)["results"]
+          counts = collections.Counter(r["status"] for r in results)
+          print(f"| Status | Count |")
+          print(f"| --- | --- |")
+          for status, n in sorted(counts.items()):
+              print(f"| {status} | {n} |")
+          failures = [r for r in results if r["status"] in ("error", "fail")]
+          if failures:
+              print("")
+              print("**Failures**")
+              for r in failures:
+                  print(f"- `{r['unique_id']}`: {r.get('message', '')}")
+          PY
+            else
+              echo "No run results produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-docs:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

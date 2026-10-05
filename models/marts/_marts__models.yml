@@ -1,0 +1,198 @@
+version: 2
+
+models:
+  - name: fct_shelter_stays
+    description: >
+      One row per shelter stay: an intake paired with the outcome that closed
+      it, or an open row for an animal still in care. The grain every other
+      question is answered from.
+
+      Stays whose outcome predates their intake are excluded and quarantined in
+      fct_data_quality_issues.
+    columns:
+      - name: stay_key
+        description: Surrogate key for the stay. Unique across the table.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: animal_id
+        description: Shelter identifier for the animal.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_animal')
+                field: animal_id
+
+      - name: is_return_stay
+        description: True where this is not the animal's first recorded intake.
+        data_tests:
+          - not_null
+
+      - name: is_open_stay
+        description: >
+          True where no outcome has been recorded yet. Open stays carry a null
+          length_of_stay_days and are excluded from outcome metrics.
+        data_tests:
+          - not_null
+
+      - name: length_of_stay_days
+        description: >
+          Whole days between intake and outcome. Null for open stays. Never
+          negative: rows that would produce one are excluded upstream.
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: true
+
+      - name: outcome_class
+        description: >
+          Live, Non-Live, or Unknown. Live covers adoption, return to owner,
+          Rto-Adopt, and transfer. Missing counts as Non-Live, not Unknown.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Live', 'Non-Live', 'Unknown']
+
+      - name: is_owner_requested_euthanasia
+        description: >
+          True where the animal arrived as a Euthanasia Request. Excluded from
+          the adjusted live release rate.
+        data_tests:
+          - not_null
+
+      - name: age_band_at_intake
+        description: >
+          Age grouping on arrival. Null where age could not be parsed, which is
+          deliberate: an unknown age is not a band.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - Under 6 months
+                  - 6 to 12 months
+                  - 1 to 3 years
+                  - 3 to 7 years
+                  - 7 years and over
+              config:
+                severity: warn
+
+  - name: dim_animal
+    description: >
+      One row per animal, with attributes from its most recent stay and counts
+      spanning its whole history.
+    columns:
+      - name: animal_id
+        description: Shelter identifier. Primary key.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: stay_count
+        description: Number of recorded stays for this animal.
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 1
+                inclusive: true
+
+      - name: has_returned
+        description: True where the animal has more than one recorded stay.
+        data_tests:
+          - not_null
+
+      - name: is_currently_in_care
+        description: True where any stay is still open.
+        data_tests:
+          - not_null
+
+  - name: mart_monthly_outcomes
+    description: >
+      One row per outcome month per animal type. Reporting table behind live
+      release rate and length of stay trends. Open stays are excluded.
+    columns:
+      - name: outcome_month
+        description: Month the animals left care, truncated to the first.
+        data_tests:
+          - not_null
+
+      - name: animal_type
+        description: Species grouping.
+
+      - name: outcomes_total
+        description: Closed outcomes in the month for this animal type.
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 1
+                inclusive: true
+
+      - name: live_release_rate_pct
+        description: >
+          Live outcomes as a percentage of all classified outcomes. Null where
+          a grouping has no classified outcomes, rather than zero.
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
+                inclusive: true
+
+      - name: live_release_rate_adjusted_pct
+        description: >
+          Live release rate excluding animals surrendered specifically for
+          euthanasia, from both numerator and denominator. Reported alongside
+          the unadjusted rate because the gap between them is itself the
+          finding in some months.
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
+                inclusive: true
+
+      - name: median_length_of_stay_days
+        description: >
+          Headline duration measure. Preferred over the mean because the
+          distribution is heavily right skewed by long-term medical and
+          behavioural cases.
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: true
+
+      - name: p90_length_of_stay_days
+        description: >
+          Ninetieth percentile stay length. Carried so the tail stays visible
+          next to the median rather than being averaged away.
+
+  - name: fct_data_quality_issues
+    description: >
+      Records excluded from or unclassified in the reporting models, with the
+      reason. Quarantined rather than deleted so the volume of exclusions is
+      itself reportable and can be watched over time.
+    columns:
+      - name: stay_key
+        description: Stay the issue relates to.
+        data_tests:
+          - not_null
+
+      - name: issue_type
+        description: Machine-readable category of the problem.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - outcome_before_intake
+                  - unrecognised_outcome_type
+                  - unusable_age_at_intake
+                  - outcome_without_intake
+
+      - name: issue_description
+        description: Plain-language explanation of what the issue means.

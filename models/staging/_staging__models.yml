@@ -1,0 +1,117 @@
+version: 2
+
+models:
+  - name: stg_shelter__intakes
+    description: >
+      Typed, deduplicated intake events with a per-animal stay sequence number.
+      One row per animal per intake.
+    columns:
+      - name: stay_key
+        description: >
+          Surrogate key on animal_id and stay_sequence. Joins an intake to the
+          outcome that closed it.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: animal_id
+        description: Shelter identifier for the animal.
+        data_tests:
+          - not_null
+
+      - name: stay_sequence
+        description: >
+          1 for an animal's first intake, 2 for the second, and so on. Ordered
+          by intake timestamp.
+        data_tests:
+          - not_null
+          - accepted_range:
+              arguments:
+                min_value: 1
+                inclusive: true
+
+      - name: intake_at
+        description: Timestamp the animal was taken into care.
+        data_tests:
+          - not_null
+
+      - name: intake_type
+        description: >
+          How the animal arrived. Normalised casing; the source feed carries
+          the same value in several forms.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - Stray
+                  - Owner Surrender
+                  - Public Assist
+                  - Wildlife
+                  - Abandoned
+                  - Euthanasia Request
+              config:
+                severity: warn
+
+      - name: age_at_intake_days
+        description: >
+          Age on arrival in days, parsed from the free-text age field. Null
+          where the source value was absent, non-numeric, or negative.
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 10950
+                inclusive: true
+              config:
+                severity: warn
+
+      - name: animal_type
+        description: Species grouping as recorded by the shelter.
+
+  - name: stg_shelter__outcomes
+    description: >
+      Typed, deduplicated outcome events with a per-animal stay sequence
+      number. One row per animal per outcome.
+    columns:
+      - name: stay_key
+        description: >
+          Surrogate key on animal_id and stay_sequence. Matches the intake it
+          closes.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: animal_id
+        description: Shelter identifier for the animal.
+        data_tests:
+          - not_null
+
+      - name: stay_sequence
+        description: Position of this outcome in the animal's history.
+        data_tests:
+          - not_null
+
+      - name: outcome_at
+        description: Timestamp the animal left care.
+        data_tests:
+          - not_null
+
+      - name: outcome_type
+        description: >
+          How the animal left. Any value outside this list classifies as
+          Unknown downstream and is excluded from live release rates, so a new
+          outcome type surfaces here rather than silently moving the metric.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - Adoption
+                  - Transfer
+                  - Return To Owner
+                  - Rto-Adopt
+                  - Euthanasia
+                  - Died
+                  - Disposal
+                  - Missing
+              config:
+                severity: warn
