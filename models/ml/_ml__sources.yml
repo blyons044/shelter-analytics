@@ -55,9 +55,11 @@ sources:
 
       - name: model_evaluation
         description: >
-          Holdout metrics for the logistic baseline and the gradient boosting
-          model on the most recent year of mature labels. Also records the
-          training and holdout windows so the gap between them can be tested.
+          Holdout metrics on the most recent year of mature labels for the
+          logistic baseline, the raw gradient boosting model, and the
+          recalibrated version that is actually used for scoring. Also records
+          the training and holdout windows so the gap between them can be
+          tested.
         columns:
           - name: model
             data_tests:
@@ -65,7 +67,7 @@ sources:
               - not_null
               - accepted_values:
                   arguments:
-                    values: ['logistic_baseline', 'gradient_boosting']
+                    values: ['logistic_baseline', 'gradient_boosting', 'gradient_boosting_recalibrated']
           - name: roc_auc
             data_tests:
               - accepted_range:

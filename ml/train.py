@@ -40,6 +40,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
+from scipy.optimize import brentq
 
 from ml import features as F
 
@@ -48,6 +49,7 @@ DB_PATH = PROJECT_ROOT / "shelter.duckdb"
 
 HOLDOUT_DAYS = 365
 TRAIN_YEARS = 4          # older years describe a different shelter
+CAL_MONTHS = 6           # most recent mature months, held back to recalibrate
 BACKTEST_MONTHS = 12
 MAX_CATEGORIES = 40      # rarer breeds, colours, and places are grouped
 RANDOM_STATE = 20261005
@@ -130,6 +132,67 @@ def boosted_model() -> Pipeline:
         random_state=RANDOM_STATE,
     )
     return Pipeline([("pre", pre), ("clf", clf)])
+
+
+def _logit(p: np.ndarray) -> np.ndarray:
+    p = np.clip(p, 1e-6, 1 - 1e-6)
+    return np.log(p / (1 - p))
+
+
+def _sigmoid(z: np.ndarray) -> np.ndarray:
+    return 1 / (1 + np.exp(-z))
+
+
+class RecalibratedModel:
+    """
+    A boosted model plus a correction for the shelter changing under it.
+
+    The long-stay rate is not stable: in Austin's 2024 to 2025 holdout it ran
+    about ten points above the long-run average, so a model fitted on four
+    years of history ranked animals well but predicted the old rate. The fix is to hold back
+    the most recent months of mature labels, fit the model on the years before
+    them, and then fit a slope and intercept on the log-odds (Platt scaling)
+    against those recent months. Ranking is unchanged as long as the slope is
+    positive; the probabilities move toward what the shelter looks like now.
+    """
+
+    def __init__(self, base: Pipeline, slope: float, intercept: float):
+        self.base = base
+        self.slope = slope
+        self.intercept = intercept
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        z = _logit(self.base.predict_proba(X)[:, 1])
+        p = _sigmoid(self.slope * z + self.intercept)
+        return np.column_stack([1 - p, p])
+
+
+def fit_recalibrated(
+    data: pd.DataFrame,
+    X_all: pd.DataFrame,
+    y_all: np.ndarray,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> tuple[RecalibratedModel, pd.Timestamp]:
+    """Fit on [start, cal_start), recalibrate on [cal_start, end). Nothing after end."""
+    cal_start = end - pd.DateOffset(months=CAL_MONTHS)
+    fit_idx = _window(data, start, cal_start).index
+    cal_idx = _window(data, cal_start, end).index
+    base = boosted_model().fit(X_all.loc[fit_idx], y_all[fit_idx])
+
+    z = _logit(base.predict_proba(X_all.loc[cal_idx])[:, 1])
+    y = y_all[cal_idx]
+    slope, intercept = 1.0, 0.0
+    if len(np.unique(y)) == 2:
+        platt = LogisticRegression(C=100.0).fit(z.reshape(-1, 1), y)
+        slope, intercept = float(platt.coef_[0, 0]), float(platt.intercept_[0])
+        if slope <= 0:
+            # A non-positive slope would flip or flatten the ranking, which
+            # only happens when the base model has no signal. Fall back to
+            # shifting the level alone, so the mean matches recent months.
+            slope = 1.0
+            intercept = brentq(lambda b: _sigmoid(z + b).mean() - y.mean(), -20, 20)
+    return RecalibratedModel(base, slope, intercept), cal_start
 
 
 # --------------------------------------------------------------------------- #
@@ -239,16 +302,48 @@ def run(expect_no_signal: bool) -> int:
           f"holdout {len(X_te):,} ({test_start:%Y-%m-%d} to {frames.label_cutoff:%Y-%m-%d})")
 
     evaluation_rows = []
-    fitted = {}
     for name, factory in (("logistic_baseline", baseline_model), ("gradient_boosting", boosted_model)):
         model = factory().fit(X_tr, y_tr)
         p = model.predict_proba(X_te)[:, 1]
-        fitted[name] = (model, p)
         row = {"model": name, **evaluate(y_te, p)}
         evaluation_rows.append(row)
         auc = row["roc_auc"]
-        print(f"  {name:<18} AUC {auc:.3f}  AP {row['average_precision']:.3f}  "
-              f"Brier {row['brier']:.3f}  top-10% lift {row['top_decile_lift']:.2f}x")
+        print(f"  {name:<30} AUC {auc:.3f}  AP {row['average_precision']:.3f}  "
+              f"Brier {row['brier']:.3f}  gap {row['mean_predicted'] - row['base_rate']:+.3f}  "
+              f"top-10% lift {row['top_decile_lift']:.2f}x")
+
+    # The model that is actually used: same window, recalibrated on its most
+    # recent six months. Reported alongside the raw model so the cost to
+    # ranking (if any) and the gain in calibration are both visible.
+    main_model, cal_start = fit_recalibrated(data, X_all, y_all, train_start, train_end)
+    p_te = main_model.predict_proba(X_te)[:, 1]
+    row = {"model": "gradient_boosting_recalibrated", **evaluate(y_te, p_te),
+           "calibration_start": cal_start, "calibration_slope": main_model.slope,
+           "calibration_intercept": main_model.intercept}
+
+    # Sensitivity check, not a scoring rule. Community cats in the
+    # shelter-neuter-return program leave within days by design, so they are
+    # easy short stays that flatter the AUC. The outcome subtype is not known
+    # at intake, so they cannot be removed from the population the model
+    # scores, but the holdout can be re-measured without them to show how much
+    # of the headline number they account for.
+    not_snr = (data.loc[test_idx, "outcome_subtype"].fillna("") != "Snr").to_numpy()
+    if not_snr.sum() and len(np.unique(y_te[not_snr])) == 2:
+        sub = evaluate(y_te[not_snr], p_te[not_snr])
+        row["n_excluding_snr"] = sub["n"]
+        row["base_rate_excluding_snr"] = sub["base_rate"]
+        row["roc_auc_excluding_snr"] = sub["roc_auc"]
+        row["top_decile_precision_excluding_snr"] = sub["top_decile_precision"]
+    evaluation_rows.append(row)
+    print(f"  {'gradient_boosting_recalibrated':<30} AUC {row['roc_auc']:.3f}  "
+          f"AP {row['average_precision']:.3f}  Brier {row['brier']:.3f}  "
+          f"gap {row['mean_predicted'] - row['base_rate']:+.3f}  "
+          f"top-10% lift {row['top_decile_lift']:.2f}x")
+    if "roc_auc_excluding_snr" in row:
+        print(f"    excluding SNR transfers: AUC {row['roc_auc_excluding_snr']:.3f}, "
+              f"long-stay rate {row['base_rate_excluding_snr']:.1%}, "
+              f"top-10% precision {row['top_decile_precision_excluding_snr']:.1%} "
+              f"({row['n_excluding_snr']:,} stays)")
 
     evaluation = pd.DataFrame(evaluation_rows)
     for col, value in (
@@ -263,7 +358,6 @@ def run(expect_no_signal: bool) -> int:
     ):
         evaluation[col] = value
 
-    main_model, p_te = fitted["gradient_boosting"]
     calibration = calibration_table(y_te, p_te)
     calibration["model_version"] = version
 
@@ -271,7 +365,7 @@ def run(expect_no_signal: bool) -> int:
     # same terms a person would use. Sampled to keep the run short.
     sample = X_te.sample(n=min(len(X_te), 15000), random_state=RANDOM_STATE)
     imp = permutation_importance(
-        main_model, sample, y_te[X_te.index.get_indexer(sample.index)],
+        main_model.base, sample, y_te[X_te.index.get_indexer(sample.index)],
         scoring="roc_auc", n_repeats=5, random_state=RANDOM_STATE,
     )
     importance = (
@@ -325,7 +419,7 @@ def run(expect_no_signal: bool) -> int:
         te = _window(data, m_start, m_end).index
         if len(te) == 0 or len(np.unique(y_all[tr])) < 2:
             continue
-        model = boosted_model().fit(X_all.loc[tr], y_all[tr])
+        model, bt_cal_start = fit_recalibrated(data, X_all, y_all, bt_train_start, bt_train_end)
         p = model.predict_proba(X_all.loc[te])[:, 1]
         metrics = evaluate(y_all[te], p)
 
@@ -351,6 +445,7 @@ def run(expect_no_signal: bool) -> int:
             "intake_month": m_start,
             "train_start": bt_train_start,
             "train_end": bt_train_end,
+            "calibration_start": bt_cal_start,
             "train_rows": len(tr),
             **metrics,
             "calibration_gap": metrics["mean_predicted"] - metrics["base_rate"],
@@ -383,8 +478,7 @@ def run(expect_no_signal: bool) -> int:
     # stays younger than 30 days: the ones where a long stay can still be
     # headed off.
     final_start = frames.label_cutoff - pd.DateOffset(years=TRAIN_YEARS)
-    final_idx = _window(data, final_start, frames.label_cutoff).index
-    final_model = boosted_model().fit(X_all.loc[final_idx], y_all[final_idx])
+    final_model, _ = fit_recalibrated(data, X_all, y_all, final_start, frames.label_cutoff)
 
     open_now = frames.unlabelled_open
     if len(open_now):
@@ -430,7 +524,7 @@ def run(expect_no_signal: bool) -> int:
     con.close()
 
     if expect_no_signal:
-        auc = evaluation.loc[evaluation["model"] == "gradient_boosting", "roc_auc"].iloc[0]
+        auc = evaluation.loc[evaluation["model"] == "gradient_boosting_recalibrated", "roc_auc"].iloc[0]
         if auc is None or auc > NO_SIGNAL_MAX_AUC:
             print(f"LEAKAGE CHECK FAILED: holdout AUC {auc} on data with no real signal "
                   f"(limit {NO_SIGNAL_MAX_AUC}). Something in the inputs encodes the label.")

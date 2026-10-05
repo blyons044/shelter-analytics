@@ -134,8 +134,41 @@ jobs:
               print("| --- | --- | --- | --- | --- | --- |")
               for m, n, base, auc, ap, lift in rows:
                   print(f"| {m} | {n:,} | {base:.1%} | {auc:.3f} | {ap:.3f} | {lift:.2f}x |")
+              snr = con.execute("""
+                  select roc_auc_excluding_snr, top_decile_precision_excluding_snr
+                  from ml.model_evaluation
+                  where model = 'gradient_boosting_recalibrated'
+              """).fetchone()
+              if snr and snr[0] is not None:
+                  print("")
+                  print(f"Excluding shelter-neuter-return transfers: AUC {snr[0]:.3f}, "
+                        f"top 10% precision {snr[1]:.1%}")
               print("")
               print(f"Backtest months flagged for review: {flagged}")
+
+              top = con.execute("""
+                  select feature, auc_drop_mean from ml.feature_importance
+                  order by rank limit 5
+              """).fetchall()
+              print("")
+              print("**Top predictors** (AUC lost when shuffled)")
+              print("")
+              for feature, drop in top:
+                  print(f"- {feature}: {drop:.3f}")
+
+              months = con.execute("""
+                  select strftime(intake_month, '%Y-%m'), n, base_rate, roc_auc,
+                         calibration_gap, status, coalesce(drifted_features, '')
+                  from ml.monthly_performance order by intake_month
+              """).fetchall()
+              print("")
+              print("**Backtest by month**")
+              print("")
+              print("| Month | Stays | Long-stay rate | AUC | Calibration gap | Status | Drifted inputs |")
+              print("| --- | --- | --- | --- | --- | --- | --- |")
+              for m, n, base, auc, gap, status, drifted in months:
+                  auc_text = f"{auc:.3f}" if auc is not None else "n/a"
+                  print(f"| {m} | {n:,} | {base:.1%} | {auc_text} | {gap:+.3f} | {status} | {drifted} |")
           PY
             else
               echo "No run results produced."

@@ -170,7 +170,7 @@ the gaps. The count is recorded on every run.
 ### Features
 
 Everything is knowable on the day the animal arrives: animal type, intake type
-and condition, sex and whether the animal is altered, age, breed and colour
+and condition, whether the animal is spayed or neutered, age, breed and colour
 (primary component, with rare values grouped), whether the breed is mixed, where
 it was found, whether it is a return stay, month and weekday of arrival, and
 how many animals of the same type were already in care that morning.
@@ -185,12 +185,35 @@ the animal's name. The published name can be edited after intake, and animals
 that are adopted tend to get named, so it carries information from the future.
 Including it would raise the score for the wrong reason.
 
+**Sex is out; spay/neuter status is in.** The first version used both, and
+sex ranked third in importance, driven almost entirely by animals recorded as
+"Unknown". Only 0.4% of those became long stays, against 26 to 33% for every
+other group, which is the kind of gap that can mean the field was filled in
+after the fact. It was not. Half of the Unknown animals left through the
+shelter-neuter-return program for community cats, and most of the rest were
+transferred to partners within days, including very young litters. They are
+animals staff could not examine on arrival, which is a fact available on day
+one. Sex itself added nothing once spay/neuter status was in (AUC 0.726 with
+it, 0.725 without), so it was dropped. Spay/neuter status was kept: removing it
+cost 0.018 of AUC, and intact animals have to be altered before adoption, which
+is a plausible reason on its own for a longer stay.
+
 ### Models and evaluation
 
 A regularised logistic regression is the baseline. The main model is gradient
 boosting with native handling of categories and missing values. Both are
 trained on four years of history, since older years are less likely to reflect
 current policies and capacity.
+
+**Recalibration.** The long-stay rate moves. On Austin's data the 2024 to 2025
+holdout ran about ten points above the long-run average, and the first version
+of the model ranked animals well but predicted the old rate, three to five
+points low in most deciles. So the model that is actually used holds back the
+most recent six months of its training window, fits on the years before, and
+then fits a slope and intercept on the log-odds against those six months
+(Platt scaling). Ranking is unchanged; the probabilities move toward what the
+shelter looks like now. All three versions are reported on the holdout,
+including the raw model, so the trade is visible rather than asserted.
 
 The holdout is the most recent year of mature labels, and training stops 30
 days before it starts, so every training label was already known on the
@@ -200,7 +223,12 @@ form, since stays from the same week share occupancy, season, and staffing.
 
 Reported on the holdout: ROC AUC, average precision (more informative than AUC
 when long stays are a minority), Brier score, calibration by decile, and
-precision in the top 10% of scores. That last one is the operational number: if
+precision in the top 10% of scores, plus the same AUC and precision with
+shelter-neuter-return transfers removed. Those cats leave within days by
+design, so they are easy short stays that flatter the headline AUC. The model
+cannot exclude them when scoring, since the program is decided after intake,
+but the evaluation can show how much of the number they account for. Top-10%
+precision is the operational number: if
 staff can give extra attention to one animal in ten, how many of those would
 actually have waited 30 days? Permutation importance is measured on raw inputs
 so it reads in the same terms a person would use.
@@ -208,8 +236,8 @@ so it reads in the same terms a person would use.
 ### Monitoring
 
 `ml.monthly_performance` is a rolling backtest over the last twelve months.
-Each month is scored by a model trained only on what was known by the first of
-that month, which is the model staff would actually have had. Its AUC and
+Each month is scored by a model trained and recalibrated only on what was known
+by the first of that month, which is the model staff would actually have had. Its AUC and
 calibration are what they would have seen, not an in-sample figure.
 
 A month is flagged for **review** when AUC falls below 0.65 or the predicted
@@ -366,6 +394,14 @@ now exists.
 ---
 
 ## Data source
+
+**The feed is not current.** As of October 2026, the latest records the city
+publishes are from 4 May 2025, and intakes and outcomes stop on the same day.
+The pipeline still pulls and rebuilds daily, and every date in the model is
+taken from the data rather than the clock, so "animals currently in care" in
+`ml.stay_scores` means animals in care when the feed stopped. Treat the project
+as a retrospective study of 2013 to 2025, not a live tool. If the feed resumes,
+nothing needs to change.
 
 Intake and outcome records published by the City of Austin under the
 [Public Domain Dedication and License](https://data.austintexas.gov).

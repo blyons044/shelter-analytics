@@ -9,6 +9,14 @@ Two rules govern everything in this file.
    the animal's name (the published name can be edited after intake, and
    animals that get adopted tend to get named).
 
+   Sex is left out too, for a different reason: on Austin's data it added
+   nothing once spay/neuter status was in (AUC 0.726 with it, 0.725 without),
+   and a feature that adds nothing is one more thing to defend. Spay/neuter
+   status stays. Its "Unknown" value turned out to mark animals staff could not
+   examine on arrival, mostly community cats in the shelter-neuter-return
+   program and very young litters sent to partners. That is information
+   genuinely available on day one. See the README.
+
 2. A label only exists once enough time has passed to know it. A stay is "long"
    at day 30, so an animal that arrived 12 days ago has no label yet, whether or
    not it has already left. Keeping the ones that left quickly and dropping the
@@ -45,7 +53,6 @@ CATEGORICAL_FEATURES = [
     "animal_type",
     "intake_type",
     "intake_condition",
-    "sex",
     "reproductive_status",
     "is_mix",
     "primary_breed",
@@ -135,6 +142,7 @@ select
     s.intake_type,
     s.intake_condition,
     s.sex_upon_intake,
+    s.outcome_subtype,
     s.breed,
     s.color,
     s.found_location,
@@ -148,15 +156,6 @@ left join census c
 -- split is seeded, but a seed only helps if the rows arrive in the same order.
 order by s.stay_key
 """
-
-
-def _sex(value: object) -> str:
-    text = str(value or "")
-    if "Female" in text:
-        return "Female"
-    if "Male" in text:
-        return "Male"
-    return "Unknown"
 
 
 def _reproductive_status(value: object) -> str:
@@ -195,7 +194,6 @@ def derive(df: pd.DataFrame) -> pd.DataFrame:
     out["animal_type"] = df["animal_type"].fillna("Unknown")
     out["intake_type"] = df["intake_type"].fillna("Unknown")
     out["intake_condition"] = df["intake_condition"].fillna("Unknown")
-    out["sex"] = df["sex_upon_intake"].map(_sex)
     out["reproductive_status"] = df["sex_upon_intake"].map(_reproductive_status)
     breed = df["breed"].fillna("")
     out["is_mix"] = np.where(breed.str.contains("Mix|/", regex=True), "Mix", "Single")
