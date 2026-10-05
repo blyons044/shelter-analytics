@@ -1,0 +1,20 @@
+selectors:
+  # The default: everything except the model's outputs and their tests, so a
+  # plain `dbt build` works on a fresh clone before the model has been trained.
+  - name: warehouse
+    default: true
+    definition:
+      union:
+        - method: fqn
+          value: "*"
+        - exclude:
+            - method: source
+              value: ml
+              children: true
+
+  # Run after `python -m ml.train`.
+  - name: ml
+    definition:
+      method: source
+      value: ml
+      children: true

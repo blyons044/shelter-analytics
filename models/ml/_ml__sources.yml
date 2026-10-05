@@ -1,0 +1,134 @@
+version: 2
+
+sources:
+  - name: ml
+    description: >
+      Outputs of the long-stay model, written by ml/train.py after the
+      warehouse is built. Declared as a source rather than built by dbt
+      because training runs in Python, but tested here like any other table:
+      a model output that breaks its contract should fail the run the same way
+      a mart would.
+
+      Excluded from the default selector, so a plain `dbt build` works before
+      the model has ever been trained. Run `dbt build --selector ml` after
+      `python -m ml.train`.
+    schema: ml
+    tables:
+      - name: stay_scores
+        description: >
+          One row per animal currently in care for under 30 days, with the
+          probability that its stay runs to 30 days or more. These are the
+          animals where a long stay can still be headed off.
+        columns:
+          - name: stay_key
+            data_tests:
+              - unique
+              - not_null
+              - relationships:
+                  arguments:
+                    to: ref('fct_shelter_stays')
+                    field: stay_key
+          - name: long_stay_probability
+            data_tests:
+              - not_null
+              - accepted_range:
+                  arguments:
+                    min_value: 0
+                    max_value: 1
+          - name: risk_band
+            description: >
+              High is the top 10% of scores on the holdout year, Elevated the
+              next 20%. Relative to what the model usually sees, not a
+              calibrated cut-off.
+            data_tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: ['High', 'Elevated', 'Typical']
+          - name: days_in_care
+            data_tests:
+              - not_null
+              - accepted_range:
+                  arguments:
+                    min_value: 0
+                    max_value: 29
+
+      - name: model_evaluation
+        description: >
+          Holdout metrics for the logistic baseline and the gradient boosting
+          model on the most recent year of mature labels. Also records the
+          training and holdout windows so the gap between them can be tested.
+        columns:
+          - name: model
+            data_tests:
+              - unique
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: ['logistic_baseline', 'gradient_boosting']
+          - name: roc_auc
+            data_tests:
+              - accepted_range:
+                  arguments:
+                    min_value: 0
+                    max_value: 1
+
+      - name: calibration
+        description: Predicted against observed long-stay rate, by score decile on the holdout year.
+        columns:
+          - name: decile
+            data_tests:
+              - unique
+              - not_null
+              - accepted_range:
+                  arguments:
+                    min_value: 1
+                    max_value: 10
+
+      - name: feature_importance
+        description: >
+          Permutation importance on the holdout year: how far AUC falls when a
+          feature is shuffled. Measured on raw inputs so it reads in plain
+          terms.
+        columns:
+          - name: feature
+            data_tests:
+              - unique
+              - not_null
+
+      - name: monthly_performance
+        description: >
+          Rolling backtest. Each month is scored by a model trained only on
+          intakes whose labels were known by the first of that month: the
+          model staff would actually have had. status is ok, review, or
+          insufficient_data.
+        columns:
+          - name: intake_month
+            data_tests:
+              - unique
+              - not_null
+          - name: status
+            data_tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: ['ok', 'review', 'insufficient_data']
+          - name: roc_auc
+            data_tests:
+              - accepted_range:
+                  arguments:
+                    min_value: 0
+                    max_value: 1
+
+      - name: feature_drift
+        description: >
+          Population stability index for key inputs, each backtest month
+          against the same calendar month in its training window. Reported,
+          not alerted on; see ml/train.py for why.
+        columns:
+          - name: psi
+            data_tests:
+              - not_null
+              - accepted_range:
+                  arguments:
+                    min_value: 0

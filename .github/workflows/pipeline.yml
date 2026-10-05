@@ -47,7 +47,26 @@ jobs:
           fi
 
       - name: Build and test
-        run: dbt build
+        run: |
+          dbt build
+          cp target/run_results.json target/run_results_warehouse.json
+
+      - name: Train and score
+        # On sample data, length of stay is random with respect to every
+        # feature, so an honest model scores near chance. --expect-no-signal
+        # fails the run if it does better than that, which would mean the
+        # label is leaking into the inputs.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python -m ml.train --expect-no-signal
+          else
+            python -m ml.train
+          fi
+
+      - name: Test model outputs
+        run: |
+          dbt build --selector ml
+          cp target/run_results.json target/run_results_ml.json
 
       - name: Generate docs
         if: github.event_name != 'pull_request'
@@ -75,11 +94,14 @@ jobs:
           {
             echo "### Pipeline run"
             echo ""
-            if [ -f target/run_results.json ]; then
+            if [ -f target/run_results_warehouse.json ]; then
               python - <<'PY'
-          import json, collections
-          with open("target/run_results.json") as fh:
-              results = json.load(fh)["results"]
+          import json, collections, pathlib
+          results = []
+          for name in ("run_results_warehouse.json", "run_results_ml.json"):
+              path = pathlib.Path("target") / name
+              if path.exists():
+                  results += json.loads(path.read_text())["results"]
           counts = collections.Counter(r["status"] for r in results)
           print(f"| Status | Count |")
           print(f"| --- | --- |")
@@ -91,6 +113,29 @@ jobs:
               print("**Failures**")
               for r in failures:
                   print(f"- `{r['unique_id']}`: {r.get('message', '')}")
+
+          import duckdb
+          try:
+              con = duckdb.connect("shelter.duckdb", read_only=True)
+              rows = con.execute("""
+                  select model, n, base_rate, roc_auc, average_precision, top_decile_lift
+                  from ml.model_evaluation order by model
+              """).fetchall()
+              flagged = con.execute(
+                  "select count(*) from ml.monthly_performance where status = 'review'"
+              ).fetchone()[0]
+          except duckdb.Error:
+              rows, flagged = [], None
+          if rows:
+              print("")
+              print("### Long-stay model, holdout year")
+              print("")
+              print("| Model | Stays | Long-stay rate | AUC | Avg precision | Top 10% lift |")
+              print("| --- | --- | --- | --- | --- | --- |")
+              for m, n, base, auc, ap, lift in rows:
+                  print(f"| {m} | {n:,} | {base:.1%} | {auc:.3f} | {ap:.3f} | {lift:.2f}x |")
+              print("")
+              print(f"Backtest months flagged for review: {flagged}")
           PY
             else
               echo "No run results produced."

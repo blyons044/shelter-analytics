@@ -11,9 +11,12 @@ data.austintexas.gov          ingest/extract.py        dbt
   intakes  (wter-evkm)  ──▶   raw.intakes       ──▶   staging ──▶ intermediate ──▶ marts
   outcomes (9t4d-g238)  ──▶   raw.outcomes                           │
                                                                      └──▶ fct_data_quality_issues
+
+fct_shelter_stays ──▶ ml/train.py ──▶ ml.stay_scores, ml.monthly_performance, ...
 ```
 
-**Stack:** dbt Core, DuckDB, Python, GitHub Actions. No package dependencies.
+**Stack:** dbt Core, DuckDB, Python, scikit-learn, GitHub Actions. No dbt package
+dependencies.
 Clone it, install the requirements, and it runs.
 
 ---
@@ -36,7 +39,9 @@ python -m ingest.extract --sample 8000   # offline, synthetic, same schema
 # or
 python -m ingest.extract                 # live pull from the city's API
 
-dbt build          # runs models and tests together
+dbt build                  # runs models and tests together
+python -m ml.train         # trains, backtests, and scores the long-stay model
+dbt build --selector ml    # tests the model's outputs
 dbt docs generate && dbt docs serve
 ```
 
@@ -130,6 +135,129 @@ Treat the trailing two months as provisional.
 
 ---
 
+## Predicting long stays
+
+The warehouse answers what happened. The model in `ml/` asks something more
+useful to a shelter: **when a dog or cat arrives, how likely is it to still be in
+care 30 days later?**
+
+The usual suspects for a long stay are age, condition on arrival, and how full
+the shelter is. Whether those hold in Austin's data is what the importance table
+is for. If staff can see the risk on day one, foster outreach and rescue conversations can start while the
+animal is still healthy and adoptable, instead of after it has spent a month in
+a kennel. The output is a ranked list of animals currently in care for under 30
+days, in `ml.stay_scores`, with a probability and a High, Elevated, or Typical
+band.
+
+### Population and label
+
+Dogs and cats only, excluding owner-requested euthanasia and wildlife, which
+follow different processes. A stay is long if it reaches 30 days, whether it has
+closed or is still open.
+
+**A label only exists once 30 days have passed.** This is the decision the rest
+of the design depends on. For an animal that arrived 12 days ago, we do not know
+yet. The tempting shortcut is to keep the recent stays that have already closed
+and drop the ones still open, but the ones that closed early are, by
+definition, short. That would bias every recent label toward short. So maturity
+is decided by intake date alone: anything within 30 days of the snapshot is
+left out of training and evaluation, whether or not it has left.
+
+**Open stays older than a year are left out** as likely missing outcomes rather
+than labelled long. The feed has gaps, and labelling them would teach the model
+the gaps. The count is recorded on every run.
+
+### Features
+
+Everything is knowable on the day the animal arrives: animal type, intake type
+and condition, sex and whether the animal is altered, age, breed and colour
+(primary component, with rare values grouped), whether the breed is mixed, where
+it was found, whether it is a return stay, month and weekday of arrival, and
+how many animals of the same type were already in care that morning.
+
+That last one is built from intake and outcome events rather than a range join,
+and only counts animals present before the day began. The feed cannot count
+animals whose intake predates it, so the first 180 days of the feed are not
+used for training.
+
+**What is deliberately left out.** Outcome fields, obviously. Less obviously,
+the animal's name. The published name can be edited after intake, and animals
+that are adopted tend to get named, so it carries information from the future.
+Including it would raise the score for the wrong reason.
+
+### Models and evaluation
+
+A regularised logistic regression is the baseline. The main model is gradient
+boosting with native handling of categories and missing values. Both are
+trained on four years of history, since older years are less likely to reflect
+current policies and capacity.
+
+The holdout is the most recent year of mature labels, and training stops 30
+days before it starts, so every training label was already known on the
+holdout's first day. Without that gap the model learns from stays whose ending
+had not happened yet. A random split has the same problem in a less visible
+form, since stays from the same week share occupancy, season, and staffing.
+
+Reported on the holdout: ROC AUC, average precision (more informative than AUC
+when long stays are a minority), Brier score, calibration by decile, and
+precision in the top 10% of scores. That last one is the operational number: if
+staff can give extra attention to one animal in ten, how many of those would
+actually have waited 30 days? Permutation importance is measured on raw inputs
+so it reads in the same terms a person would use.
+
+### Monitoring
+
+`ml.monthly_performance` is a rolling backtest over the last twelve months.
+Each month is scored by a model trained only on what was known by the first of
+that month, which is the model staff would actually have had. Its AUC and
+calibration are what they would have seen, not an in-sample figure.
+
+A month is flagged for **review** when AUC falls below 0.65 or the predicted
+long-stay rate is more than five points from the observed one. Months with
+under 200 intakes are marked **insufficient_data**, because an AUC on a few
+dozen animals moves more from noise than from the model.
+
+Input drift is measured with a population stability index for each month
+against **the same calendar month** in its training window. Comparing May with
+a whole year would flag kitten season as drift every spring. Drift is recorded
+per feature but does not flag a month on its own. A shift in who arrives only
+matters if the model stops ranking them well, which the performance checks
+catch, and alerting on drift alone trains people to ignore alerts. When a month
+is flagged, the drift table is where to look for why.
+
+### Checking it is not cheating
+
+Three things guard against the model looking better than it is:
+
+- **A leakage check on every pull request.** In the synthetic sample, length of
+  stay is random with respect to every feature, so an honest model should score
+  near an AUC of 0.5. `--expect-no-signal` fails the run if it scores above
+  0.6. The check was verified by deliberately feeding the model the answer,
+  which it caught.
+- **dbt tests on the model's outputs.** The training windows are stored with
+  every result, and `assert_backtest_trained_before_scored` and
+  `assert_holdout_trained_before_holdout` prove the 30-day gap held rather than
+  trusting the code. `assert_scores_only_for_young_open_stays` proves the list
+  staff would act on contains only the animals it should.
+- **A fixed row order.** The model's internal validation split is seeded, but a
+  seed only makes results repeatable if the rows arrive in the same order, so
+  the training query sorts them.
+
+### What it cannot tell you
+
+A high score says an animal resembles others that waited a long time. It does
+not say why, and it does not say what would help. It is a prompt to look
+sooner, not a judgement about the animal, and it should never be used to
+decide which animals receive care. Breed in particular reflects how adopters
+behave, including their biases, as much as anything about the animal.
+
+The model also learns the shelter's past practices. If a policy change
+shortens stays for a group the model scores as high, its scores for that group
+will run high until enough new history accumulates. That is one of the things
+the calibration check exists to catch.
+
+---
+
 ## Models
 
 | Model | Grain | Notes |
@@ -141,12 +269,18 @@ Treat the trailing two months as provisional.
 | `dim_animal` | One row per animal | Latest attributes, full stay history |
 | `mart_monthly_outcomes` | Month by animal type | Live release rate, length of stay |
 | `fct_data_quality_issues` | One row per issue | What was excluded, and why |
+| `ml.stay_scores` | One row per animal in care under 30 days | Long-stay probability and band |
+| `ml.monthly_performance` | One row per backtest month | AUC, calibration, status |
+| `ml.feature_drift` | Month by feature | Population stability index |
+| `ml.model_evaluation` | One row per model | Holdout metrics and training windows |
 
 ## Testing
 
 54 tests run on every build, as part of `dbt build` rather than a separate step,
 so a model that breaks its own contract does not get published first and tested
-afterwards.
+afterwards. A further 28 run against the long-stay model's outputs; they sit
+behind the `ml` selector so a fresh clone can build the warehouse before the
+model has ever been trained.
 
 Schema tests cover uniqueness and nullability on every key, accepted values on
 every categorical that feeds a metric, referential integrity between the fact
@@ -171,9 +305,9 @@ news, not a reason to fail the build and leave yesterday's numbers in place.
 
 ## Orchestration
 
-`.github/workflows/pipeline.yml` runs the extract, the build, and the tests
-daily, publishes the dbt docs to Pages, and writes a pass/fail table to the run
-summary.
+`.github/workflows/pipeline.yml` runs the extract, the build, the tests, and
+the model daily, publishes the dbt docs to Pages, and writes a pass/fail table
+and the model's holdout metrics to the run summary.
 
 Pull requests run against sample data rather than the live API, so a fork cannot
 trigger a full extract against the city's servers. The schema is identical
